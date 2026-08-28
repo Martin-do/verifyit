@@ -60,29 +60,34 @@ def test_conflicting_ratings_fail_safe() -> None:
     assert conflicting is True
 
 
-def test_provider_http_error_exposes_safe_detail_without_key(monkeypatch) -> None:
-    request = httpx.Request(
-        "GET",
-        "https://factchecktools.googleapis.com/v1alpha1/claims:search?key=SUPER_SECRET_KEY",
-    )
+def test_provider_uses_bearer_token_and_exposes_safe_http_detail(monkeypatch) -> None:
+    request = httpx.Request("GET", "https://factchecktools.googleapis.com/v1alpha1/claims:search")
     response = httpx.Response(
         403,
         request=request,
         json={
             "error": {
                 "status": "PERMISSION_DENIED",
-                "message": "Fact Check Tools API has not been used in project 123 before or it is disabled.",
+                "message": "The caller does not have permission.",
             }
         },
     )
-    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: response)
+    captured: dict[str, object] = {}
+
+    def fake_get(*args, **kwargs):
+        captured["params"] = kwargs.get("params")
+        captured["headers"] = kwargs.get("headers")
+        return response
+
+    monkeypatch.setattr(httpx, "get", fake_get)
 
     with pytest.raises(FactCheckProviderError) as caught:
-        search_fact_checks("claim", "claim", "SUPER_SECRET_KEY")
+        search_fact_checks("claim", "claim", "SUPER_SECRET_TOKEN")
 
     exc = caught.value
     assert exc.status_code == 403
     assert "PERMISSION_DENIED" in (exc.detail or "")
-    assert "disabled" in (exc.detail or "")
-    assert "SUPER_SECRET_KEY" not in str(exc)
-    assert "SUPER_SECRET_KEY" not in (exc.detail or "")
+    assert "SUPER_SECRET_TOKEN" not in str(exc)
+    assert "SUPER_SECRET_TOKEN" not in (exc.detail or "")
+    assert captured["headers"] == {"Authorization": "Bearer SUPER_SECRET_TOKEN"}
+    assert "key" not in (captured["params"] or {})
