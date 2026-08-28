@@ -15,10 +15,19 @@ MAX_RESPONSE_BYTES = 1_500_000
 MAX_REDIRECTS = 5
 REQUEST_TIMEOUT_SECONDS = 8.0
 USER_AGENT = "VerifyIt/0.2 (+https://github.com/Martin-do/verifyit)"
+SOCIAL_PLATFORMS = {"facebook", "instagram", "x", "tiktok"}
 
 
 class UrlSafetyError(ValueError):
     pass
+
+
+@dataclass
+class SocialPageAssessment:
+    status: ExtractionStatus
+    title: str | None = None
+    text: str = ""
+    warning: str = ""
 
 
 @dataclass
@@ -141,8 +150,24 @@ def parse_html(html: str) -> tuple[str | None, str]:
     return title, text[:20_000]
 
 
+def extract_social_description(html: str) -> str | None:
+    soup = BeautifulSoup(html, "html.parser")
+    candidates = (
+        ("property", "og:description"),
+        ("name", "description"),
+        ("name", "twitter:description"),
+    )
+    for attr, value in candidates:
+        tag = soup.find("meta", attrs={attr: value})
+        if tag and tag.get("content"):
+            description = " ".join(str(tag.get("content")).split())
+            if description:
+                return description[:5000]
+    return None
+
+
 def _looks_like_login_wall(platform: str | None, title: str | None, text: str) -> bool:
-    if platform not in {"facebook", "instagram"}:
+    if platform not in SOCIAL_PLATFORMS:
         return False
     sample = f"{title or ''} {text[:2500]}".lower()
     markers = (
@@ -152,8 +177,87 @@ def _looks_like_login_wall(platform: str | None, title: str | None, text: str) -
         "log in to instagram",
         "login to instagram",
         "sign up for instagram",
+        "log in to x",
+        "sign in to x",
+        "log in to tiktok",
+        "sign up for tiktok",
     )
     return any(marker in sample for marker in markers)
+
+
+def _generic_social_title(platform: str, title: str | None) -> bool:
+    if not title:
+        return True
+    normalized = " ".join(title.lower().split()).strip(" -|·")
+    generic = {
+        "facebook": {"facebook", "facebook – log in or sign up", "facebook - log in or sign up"},
+        "instagram": {"instagram", "instagram • photos and videos"},
+        "x": {"x", "twitter", "x / twitter"},
+        "tiktok": {"tiktok", "tiktok - make your day"},
+    }
+    return normalized in generic.get(platform, set())
+
+
+def _meaningful_social_description(platform: str, description: str | None) -> bool:
+    if not description or len(description.strip()) < 24:
+        return False
+    sample = description.lower()
+    generic_markers = (
+        "log in to facebook",
+        "create an account or log into facebook",
+        "facebook helps you connect",
+        "log in to instagram",
+        "sign up to see photos",
+        "see instagram photos",
+        "log in to x",
+        "sign up for x",
+        "log in to tiktok",
+        "join tiktok",
+    )
+    if any(marker in sample for marker in generic_markers):
+        return False
+    return sample.strip(" .-|·") != platform
+
+
+def assess_social_html(platform: str, html: str, title: str | None = None, text: str | None = None) -> SocialPageAssessment:
+    """Classify a social HTML response without assuming HTTP success means post access."""
+
+    if title is None or text is None:
+        parsed_title, parsed_text = parse_html(html)
+        title = parsed_title if title is None else title
+        text = parsed_text if text is None else text
+
+    safe_title = None if _generic_social_title(platform, title) else title
+    if _looks_like_login_wall(platform, title, text):
+        return SocialPageAssessment(
+            status=ExtractionStatus.BLOCKED,
+            title=safe_title,
+            warning=(
+                "The social platform exposed a login/interstitial page rather than the actual post. "
+                "VerifyIt will not infer the hidden content. Upload a screenshot/video or paste the post text to continue."
+            ),
+        )
+
+    description = extract_social_description(html)
+    if _meaningful_social_description(platform, description):
+        return SocialPageAssessment(
+            status=ExtractionStatus.PARTIAL,
+            title=safe_title,
+            text=description or "",
+            warning=(
+                "Only public text metadata from the social post was accessible. VerifyIt could not confirm access to all post media or context, "
+                "so only that accessible text may be used."
+            ),
+        )
+
+    return SocialPageAssessment(
+        status=ExtractionStatus.PLATFORM_ONLY,
+        title=safe_title,
+        warning=(
+            "The platform responded, but VerifyIt could not confirm access to the actual post content. "
+            "Nothing from the unseen post was used. Upload a screenshot/video or paste the post text to continue."
+        ),
+    )
 
 
 def fetch_url(value: str) -> ExtractedPage:
@@ -219,16 +323,17 @@ def fetch_url(value: str) -> ExtractedPage:
                     else:
                         title, text = parse_html(raw_text)
 
-                    if _looks_like_login_wall(platform, title, text):
+                    if platform in SOCIAL_PLATFORMS:
+                        assessment = assess_social_html(platform, raw_text, title=title, text=text)
                         return ExtractedPage(
                             requested_url=requested,
                             final_url=current,
                             platform=platform,
                             content_type=content_type,
-                            title=title,
-                            text=text[:1500],
-                            status=ExtractionStatus.BLOCKED,
-                            warnings=["The social platform exposed a login/interstitial page rather than the actual post. VerifyIt will not infer the hidden content."],
+                            title=assessment.title,
+                            text=assessment.text,
+                            status=assessment.status,
+                            warnings=[assessment.warning] if assessment.warning else [],
                         )
 
                     warnings: list[str] = []
