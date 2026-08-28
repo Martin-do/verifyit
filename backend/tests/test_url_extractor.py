@@ -2,7 +2,15 @@ import socket
 
 import pytest
 
-from app.services.url_extractor import UrlSafetyError, normalize_url, parse_html, platform_for_url, validate_public_url
+from app.models import ExtractionStatus
+from app.services.url_extractor import (
+    UrlSafetyError,
+    assess_social_html,
+    normalize_url,
+    parse_html,
+    platform_for_url,
+    validate_public_url,
+)
 
 
 def test_normalize_url_strips_fragment() -> None:
@@ -40,3 +48,38 @@ def test_parse_html_removes_scripts() -> None:
     assert title == "Claim page"
     assert "Hello World" in text
     assert "steal" not in text
+
+
+def test_generic_facebook_shell_is_not_treated_as_post_access() -> None:
+    html = """
+    <html><head><title>Facebook</title></head>
+    <body><main>Facebook</main></body></html>
+    """
+    result = assess_social_html("facebook", html)
+    assert result.status == ExtractionStatus.PLATFORM_ONLY
+    assert result.title is None
+    assert result.text == ""
+    assert "could not confirm access" in result.warning
+
+
+def test_social_login_wall_is_blocked() -> None:
+    html = """
+    <html><head><title>Facebook</title></head>
+    <body>Log in to Facebook to continue</body></html>
+    """
+    result = assess_social_html("facebook", html)
+    assert result.status == ExtractionStatus.BLOCKED
+    assert result.text == ""
+
+
+def test_public_social_description_is_partial_not_full_access() -> None:
+    html = """
+    <html><head>
+      <title>Facebook</title>
+      <meta property="og:description" content="A public post claims the city will close all schools tomorrow because of flooding.">
+    </head><body>Facebook</body></html>
+    """
+    result = assess_social_html("facebook", html)
+    assert result.status == ExtractionStatus.PARTIAL
+    assert result.title is None
+    assert "close all schools" in result.text
