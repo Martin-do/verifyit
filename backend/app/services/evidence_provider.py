@@ -100,16 +100,17 @@ register_evidence_provider("google-factcheck", _google_factory)
 
 
 def get_configured_evidence_provider() -> EvidenceProvider | None:
-    """Return the selected evidence provider when its configuration is available.
+    """Return the explicitly selected evidence provider when configured.
 
-    ``VERIFYIT_EVIDENCE_PROVIDER`` selects a registered provider. Custom/self-hosted
-    integrations can implement ``EvidenceProvider`` and register their own factory.
-    The bundled provider uses OAuth/Application Default Credentials rather than an API key.
+    ``VERIFYIT_EVIDENCE_PROVIDER`` selects a registered provider. Keeping selection
+    explicit avoids silently coupling VerifyIt to any provider found on the host.
+    Custom/self-hosted integrations can implement ``EvidenceProvider`` and register
+    their own factory.
     """
 
     provider_id = os.getenv("VERIFYIT_EVIDENCE_PROVIDER", "").strip().lower()
-    if provider_id:
-        factory = _PROVIDER_FACTORIES.get(provider_id)
-        return factory() if factory else None
+    if not provider_id:
+        return None
 
-    return _google_factory()
+    factory = _PROVIDER_FACTORIES.get(provider_id)
+    return factory() if factory else None
