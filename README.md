@@ -73,7 +73,17 @@ A registered provider can be selected with:
 VERIFYIT_EVIDENCE_PROVIDER=<provider-id>
 ```
 
-The repository includes an optional bundled Google Fact Check Tools adapter for development/testing. If you want to use it, configure its key in `.env`. Developers can instead register another API, search service, RAG system, database, or self-hosted retriever without changing the verifier.
+The repository includes an optional bundled published-fact-check adapter for development/testing. Its current upstream service requires OAuth-authenticated credentials, so the adapter uses Google Application Default Credentials (ADC) rather than an API key. Developers can instead register another API, search service, RAG system, database, or self-hosted retriever without changing the verifier.
+
+For local ADC setup, install the Google Cloud CLI and create credentials with the required Fact Check Tools scope. Because this is a non-default OAuth scope, use your own OAuth client configuration when creating local ADC credentials:
+
+```bash
+gcloud auth application-default login \
+  --client-id-file=PATH_TO_CLIENT_JSON \
+  --scopes=https://www.googleapis.com/auth/factchecktools,https://www.googleapis.com/auth/cloud-platform
+```
+
+VerifyIt then discovers those credentials automatically through `google-auth`. Production deployments should use an appropriate ADC-supported workload identity rather than storing secrets in the repository.
 
 See `docs/evidence-providers.md` for the provider contract and extension instructions.
 

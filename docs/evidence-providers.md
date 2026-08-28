@@ -28,14 +28,31 @@ To select a registered provider, set:
 VERIFYIT_EVIDENCE_PROVIDER=<provider-id>
 ```
 
-For the bundled adapter:
+The bundled adapter now authenticates with OAuth 2.0 rather than an API key. It uses Google Application Default Credentials (ADC) with this scope:
 
 ```text
-VERIFYIT_EVIDENCE_PROVIDER=google_factcheck
-GOOGLE_FACT_CHECK_API_KEY=<key>
+https://www.googleapis.com/auth/factchecktools
 ```
 
-Provider credentials belong in `.env` or the deployment secret store. They must not be exposed in user-facing responses.
+For local development, create ADC credentials outside the repository. A typical flow is:
+
+```bash
+gcloud auth application-default login \
+  --client-id-file=PATH_TO_CLIENT_JSON \
+  --scopes=https://www.googleapis.com/auth/factchecktools,https://www.googleapis.com/auth/cloud-platform
+```
+
+`google-auth` then discovers and refreshes the credentials automatically. `GOOGLE_APPLICATION_CREDENTIALS` is also honored by ADC when an appropriate workload credential file is supplied.
+
+For short-lived debugging only, the bundled adapter also accepts:
+
+```text
+VERIFYIT_GOOGLE_ACCESS_TOKEN=<temporary OAuth access token>
+```
+
+Do not commit access tokens, OAuth client secrets, ADC files, or service-account keys. Production deployments should use the platform's supported workload identity/ADC mechanism wherever possible.
+
+The previous `GOOGLE_FACT_CHECK_API_KEY` configuration is no longer used because the live search endpoint rejects API-key-only authentication.
 
 ## Adding a custom provider
 

@@ -108,7 +108,7 @@ def normalize_rating(value: str | None) -> Verdict | None:
 
 
 def _safe_error_detail(response: httpx.Response) -> str | None:
-    """Extract provider diagnostics without including the request URL or API key."""
+    """Extract provider diagnostics without including auth headers or request URLs."""
 
     try:
         payload = response.json()
@@ -125,15 +125,21 @@ def _safe_error_detail(response: httpx.Response) -> str | None:
     return detail[:600] or None
 
 
-def search_fact_checks(query: str, context: str, api_key: str, page_size: int = 8) -> list[FactCheckHit]:
+def search_fact_checks(query: str, context: str, access_token: str, page_size: int = 8) -> list[FactCheckHit]:
     params = {
         "query": " ".join(query.split())[:500],
         "pageSize": max(1, min(page_size, 20)),
-        "key": api_key,
     }
+    headers = {"Authorization": f"Bearer {access_token}"}
 
     try:
-        response = httpx.get(FACTCHECK_ENDPOINT, params=params, timeout=8.0, follow_redirects=False)
+        response = httpx.get(
+            FACTCHECK_ENDPOINT,
+            params=params,
+            headers=headers,
+            timeout=8.0,
+            follow_redirects=False,
+        )
     except httpx.TimeoutException:
         raise FactCheckProviderError("Fact-check provider request timed out.", detail="request timed out") from None
     except httpx.RequestError as exc:

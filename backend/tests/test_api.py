@@ -8,6 +8,7 @@ client = TestClient(app)
 
 def _clear_provider(monkeypatch) -> None:
     monkeypatch.delenv("VERIFYIT_EVIDENCE_PROVIDER", raising=False)
+    monkeypatch.delenv("VERIFYIT_GOOGLE_ACCESS_TOKEN", raising=False)
     monkeypatch.delenv("GOOGLE_FACT_CHECK_API_KEY", raising=False)
 
 
