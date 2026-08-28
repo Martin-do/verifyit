@@ -22,6 +22,7 @@ class ExtractionStatus(str, Enum):
     NOT_APPLICABLE = "not_applicable"
     ACCESSED = "accessed"
     PARTIAL = "partial"
+    PLATFORM_ONLY = "platform_only"
     BLOCKED = "blocked"
     FETCH_FAILED = "fetch_failed"
     REJECTED = "rejected"
