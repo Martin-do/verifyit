@@ -45,7 +45,13 @@ class GoogleFactCheckProvider:
         try:
             return search_fact_checks(query, context, self.api_key)
         except FactCheckProviderError as exc:
-            raise EvidenceProviderError("The configured evidence provider failed.") from exc
+            parts: list[str] = []
+            if exc.status_code is not None:
+                parts.append(f"HTTP {exc.status_code}")
+            if exc.detail:
+                parts.append(exc.detail)
+            safe_detail = " | ".join(parts) or str(exc)
+            raise EvidenceProviderError(safe_detail) from None
 
 
 def _google_factory() -> EvidenceProvider | None:
