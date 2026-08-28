@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 
@@ -7,13 +8,15 @@ from app.models import VerifyRequest, VerifyResponse
 from app.services.verifier import verify
 
 
+ROOT_DIR = Path(__file__).resolve().parents[2]
+load_dotenv(ROOT_DIR / ".env")
+
 app = FastAPI(
     title="VerifyIt API",
-    version="0.1.0",
+    version="0.2.0",
     description="Evidence-backed verification API for claims, links, posts, and media.",
 )
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
 WEB_INDEX = ROOT_DIR / "web" / "index.html"
 
 

@@ -16,20 +16,6 @@ MAX_REDIRECTS = 5
 REQUEST_TIMEOUT_SECONDS = 8.0
 USER_AGENT = "VerifyIt/0.2 (+https://github.com/Martin-do/verifyit)"
 
-SOCIAL_HOSTS = {
-    "facebook.com",
-    "www.facebook.com",
-    "m.facebook.com",
-    "instagram.com",
-    "www.instagram.com",
-    "x.com",
-    "www.x.com",
-    "twitter.com",
-    "www.twitter.com",
-    "tiktok.com",
-    "www.tiktok.com",
-}
-
 
 class UrlSafetyError(ValueError):
     pass
@@ -73,9 +59,10 @@ def normalize_url(value: str) -> str:
     if port is not None and port not in {80, 443}:
         raise UrlSafetyError("Only standard HTTP and HTTPS ports are allowed.")
 
-    netloc = host
+    display_host = f"[{host}]" if ":" in host else host
+    netloc = display_host
     if port and not ((parsed.scheme.lower() == "http" and port == 80) or (parsed.scheme.lower() == "https" and port == 443)):
-        netloc = f"{host}:{port}"
+        netloc = f"{display_host}:{port}"
 
     return urlunparse((parsed.scheme.lower(), netloc, parsed.path or "/", parsed.params, parsed.query, ""))
 
@@ -124,15 +111,19 @@ def validate_public_url(value: str) -> str:
     return normalized
 
 
+def _host_matches(host: str, domain: str) -> bool:
+    return host == domain or host.endswith(f".{domain}")
+
+
 def platform_for_url(value: str) -> str | None:
     host = (urlparse(value).hostname or "").lower()
-    if "facebook.com" in host:
+    if _host_matches(host, "facebook.com"):
         return "facebook"
-    if "instagram.com" in host:
+    if _host_matches(host, "instagram.com"):
         return "instagram"
-    if host in {"x.com", "www.x.com", "twitter.com", "www.twitter.com"}:
+    if _host_matches(host, "x.com") or _host_matches(host, "twitter.com"):
         return "x"
-    if "tiktok.com" in host:
+    if _host_matches(host, "tiktok.com"):
         return "tiktok"
     return None
 
@@ -170,11 +161,7 @@ def fetch_url(value: str) -> ExtractedPage:
     try:
         current = validate_public_url(requested)
     except UrlSafetyError as exc:
-        return ExtractedPage(
-            requested_url=requested,
-            status=ExtractionStatus.REJECTED,
-            warnings=[str(exc)],
-        )
+        return ExtractedPage(requested_url=requested, status=ExtractionStatus.REJECTED, warnings=[str(exc)])
 
     platform = platform_for_url(current)
     client = httpx.Client(
@@ -191,34 +178,16 @@ def fetch_url(value: str) -> ExtractedPage:
                     if response.status_code in {301, 302, 303, 307, 308}:
                         location = response.headers.get("location")
                         if not location:
-                            return ExtractedPage(
-                                requested_url=requested,
-                                final_url=current,
-                                platform=platform,
-                                status=ExtractionStatus.FETCH_FAILED,
-                                warnings=["The URL returned a redirect without a destination."],
-                            )
+                            return ExtractedPage(requested_url=requested, final_url=current, platform=platform, status=ExtractionStatus.FETCH_FAILED, warnings=["The URL returned a redirect without a destination."])
                         current = validate_public_url(urljoin(current, location))
                         platform = platform_for_url(current) or platform
                         continue
 
                     if response.status_code in {401, 403}:
-                        return ExtractedPage(
-                            requested_url=requested,
-                            final_url=current,
-                            platform=platform,
-                            status=ExtractionStatus.BLOCKED,
-                            warnings=[f"The source returned HTTP {response.status_code}; its contents could not be inspected."],
-                        )
+                        return ExtractedPage(requested_url=requested, final_url=current, platform=platform, status=ExtractionStatus.BLOCKED, warnings=[f"The source returned HTTP {response.status_code}; its contents could not be inspected."])
 
                     if response.status_code >= 400:
-                        return ExtractedPage(
-                            requested_url=requested,
-                            final_url=current,
-                            platform=platform,
-                            status=ExtractionStatus.FETCH_FAILED,
-                            warnings=[f"The source returned HTTP {response.status_code}."],
-                        )
+                        return ExtractedPage(requested_url=requested, final_url=current, platform=platform, status=ExtractionStatus.FETCH_FAILED, warnings=[f"The source returned HTTP {response.status_code}."])
 
                     content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
                     if content_type and content_type not in {"text/html", "text/plain", "application/xhtml+xml"}:
@@ -228,17 +197,17 @@ def fetch_url(value: str) -> ExtractedPage:
                             platform=platform,
                             content_type=content_type,
                             status=ExtractionStatus.PARTIAL,
-                            warnings=[
-                                f"The URL points to {content_type or 'non-text content'}. Direct media analysis is not implemented yet."
-                            ],
+                            warnings=[f"The URL points to {content_type or 'non-text content'}. Direct media analysis is not implemented yet."],
                         )
 
                     data = bytearray()
+                    truncated = False
                     for chunk in response.iter_bytes():
                         if len(data) + len(chunk) > MAX_RESPONSE_BYTES:
                             remaining = MAX_RESPONSE_BYTES - len(data)
                             if remaining > 0:
                                 data.extend(chunk[:remaining])
+                            truncated = True
                             break
                         data.extend(chunk)
 
@@ -259,14 +228,12 @@ def fetch_url(value: str) -> ExtractedPage:
                             title=title,
                             text=text[:1500],
                             status=ExtractionStatus.BLOCKED,
-                            warnings=[
-                                "The social platform exposed a login/interstitial page rather than the actual post. VerifyIt will not infer the hidden content."
-                            ],
+                            warnings=["The social platform exposed a login/interstitial page rather than the actual post. VerifyIt will not infer the hidden content."],
                         )
 
                     warnings: list[str] = []
                     status = ExtractionStatus.ACCESSED
-                    if len(data) >= MAX_RESPONSE_BYTES:
+                    if truncated:
                         status = ExtractionStatus.PARTIAL
                         warnings.append("The page was larger than the extraction limit, so only the first portion was inspected.")
 
@@ -281,28 +248,10 @@ def fetch_url(value: str) -> ExtractedPage:
                         warnings=warnings,
                     )
             except UrlSafetyError as exc:
-                return ExtractedPage(
-                    requested_url=requested,
-                    final_url=current,
-                    platform=platform,
-                    status=ExtractionStatus.REJECTED,
-                    warnings=[f"A redirect was rejected for safety: {exc}"],
-                )
+                return ExtractedPage(requested_url=requested, final_url=current, platform=platform, status=ExtractionStatus.REJECTED, warnings=[f"A redirect was rejected for safety: {exc}"])
             except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
-                return ExtractedPage(
-                    requested_url=requested,
-                    final_url=current,
-                    platform=platform,
-                    status=ExtractionStatus.FETCH_FAILED,
-                    warnings=[f"The source could not be fetched: {exc.__class__.__name__}."],
-                )
+                return ExtractedPage(requested_url=requested, final_url=current, platform=platform, status=ExtractionStatus.FETCH_FAILED, warnings=[f"The source could not be fetched: {exc.__class__.__name__}."])
 
-        return ExtractedPage(
-            requested_url=requested,
-            final_url=current,
-            platform=platform,
-            status=ExtractionStatus.FETCH_FAILED,
-            warnings=["Too many redirects were encountered."],
-        )
+        return ExtractedPage(requested_url=requested, final_url=current, platform=platform, status=ExtractionStatus.FETCH_FAILED, warnings=["Too many redirects were encountered."])
     finally:
         client.close()
