@@ -17,7 +17,16 @@ STOP_WORDS = {
 
 
 class FactCheckProviderError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        detail: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.detail = detail
 
 
 @dataclass
@@ -98,6 +107,24 @@ def normalize_rating(value: str | None) -> Verdict | None:
     return None
 
 
+def _safe_error_detail(response: httpx.Response) -> str | None:
+    """Extract provider diagnostics without including the request URL or API key."""
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(error, dict):
+        return None
+
+    status = str(error.get("status") or "").strip()
+    message = str(error.get("message") or "").strip()
+    detail = ": ".join(part for part in (status, message) if part)
+    return detail[:600] or None
+
+
 def search_fact_checks(query: str, context: str, api_key: str, page_size: int = 8) -> list[FactCheckHit]:
     params = {
         "query": " ".join(query.split())[:500],
@@ -107,10 +134,31 @@ def search_fact_checks(query: str, context: str, api_key: str, page_size: int = 
 
     try:
         response = httpx.get(FACTCHECK_ENDPOINT, params=params, timeout=8.0, follow_redirects=False)
+    except httpx.TimeoutException:
+        raise FactCheckProviderError("Fact-check provider request timed out.", detail="request timed out") from None
+    except httpx.RequestError as exc:
+        raise FactCheckProviderError(
+            "Fact-check provider network request failed.",
+            detail=exc.__class__.__name__,
+        ) from None
+
+    try:
         response.raise_for_status()
+    except httpx.HTTPStatusError:
+        raise FactCheckProviderError(
+            "Fact-check provider returned an HTTP error.",
+            status_code=response.status_code,
+            detail=_safe_error_detail(response),
+        ) from None
+
+    try:
         payload = response.json()
-    except (httpx.HTTPError, ValueError) as exc:
-        raise FactCheckProviderError("Google Fact Check search failed.") from exc
+    except ValueError:
+        raise FactCheckProviderError(
+            "Fact-check provider returned invalid JSON.",
+            status_code=response.status_code,
+            detail="response was not valid JSON",
+        ) from None
 
     hits: list[FactCheckHit] = []
     for claim in payload.get("claims", []):

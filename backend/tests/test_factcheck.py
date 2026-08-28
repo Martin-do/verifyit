@@ -1,5 +1,15 @@
+import httpx
+import pytest
+
 from app.models import Verdict
-from app.services.factcheck import FactCheckHit, claim_match_score, consensus_verdict, normalize_rating
+from app.services.factcheck import (
+    FactCheckHit,
+    FactCheckProviderError,
+    claim_match_score,
+    consensus_verdict,
+    normalize_rating,
+    search_fact_checks,
+)
 
 
 def _hit(verdict: Verdict | None, score: float, url: str = "https://example.com/check") -> FactCheckHit:
@@ -48,3 +58,31 @@ def test_conflicting_ratings_fail_safe() -> None:
     assert verdict == Verdict.UNVERIFIED
     assert confidence == 0.0
     assert conflicting is True
+
+
+def test_provider_http_error_exposes_safe_detail_without_key(monkeypatch) -> None:
+    request = httpx.Request(
+        "GET",
+        "https://factchecktools.googleapis.com/v1alpha1/claims:search?key=SUPER_SECRET_KEY",
+    )
+    response = httpx.Response(
+        403,
+        request=request,
+        json={
+            "error": {
+                "status": "PERMISSION_DENIED",
+                "message": "Fact Check Tools API has not been used in project 123 before or it is disabled.",
+            }
+        },
+    )
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: response)
+
+    with pytest.raises(FactCheckProviderError) as caught:
+        search_fact_checks("claim", "claim", "SUPER_SECRET_KEY")
+
+    exc = caught.value
+    assert exc.status_code == 403
+    assert "PERMISSION_DENIED" in (exc.detail or "")
+    assert "disabled" in (exc.detail or "")
+    assert "SUPER_SECRET_KEY" not in str(exc)
+    assert "SUPER_SECRET_KEY" not in (exc.detail or "")
