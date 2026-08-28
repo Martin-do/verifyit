@@ -13,6 +13,7 @@ VerifyIt aims to reduce that to one action.
 - **Evidence first:** verdicts must be grounded in retrieved evidence, not model intuition.
 - **Transparent uncertainty:** `UNVERIFIED` is a valid result when evidence is insufficient.
 - **Source quality matters:** official and primary sources are preferred over secondary summaries.
+- **Provider-neutral core:** evidence retrieval is behind a generic provider interface rather than tied to one vendor.
 - **Plain-language output:** users get a concise bottom line before deeper detail.
 - **Cross-platform by design:** web, share-sheet, social bots, and messaging integrations reuse the same verification backend.
 - **Safety over engagement:** scam, phishing, financial, health, and other high-risk claims surface clear warnings.
@@ -28,7 +29,9 @@ VerifyIt aims to reduce that to one action.
 
 ## Current milestone
 
-VerifyIt 0.2 can inspect accessible public HTTP/HTTPS pages and optionally search published ClaimReview fact checks through Google's Fact Check Tools API. It still fails safe: inaccessible content, weak matches, conflicting ratings, or missing evidence remain `UNVERIFIED`.
+VerifyIt 0.2 can inspect accessible public HTTP/HTTPS pages and can use a configured evidence provider. The repository currently ships one published-fact-check adapter as an MVP example, but the verification engine itself is provider-neutral.
+
+Social-media HTML is treated more cautiously than ordinary webpages. A platform returning a generic shell does **not** mean the underlying post was accessed. VerifyIt distinguishes full page access, partial public metadata, platform-only responses, blocked/login-wall content, fetch failures, and rejected URLs.
 
 ### Run locally
 
@@ -48,9 +51,11 @@ Open `http://127.0.0.1:8000`.
 
 API documentation is available at `http://127.0.0.1:8000/docs`.
 
-### Enable published fact-check search
+### Evidence providers
 
-Google's Fact Check Tools API requires an API key. Enable the **Fact Check Tools API** in a Google Cloud project and create an API key, then copy the repository example file:
+The public VerifyIt experience does not expose provider credentials or vendor-specific setup messages. Evidence providers implement the shared `EvidenceProvider` protocol and are selected through configuration.
+
+Copy the repository example file:
 
 ```bash
 cp .env.example .env
@@ -62,15 +67,17 @@ On Windows PowerShell:
 Copy-Item .env.example .env
 ```
 
-Edit `.env` and set:
+A registered provider can be selected with:
 
 ```text
-GOOGLE_FACT_CHECK_API_KEY=your_key_here
+VERIFYIT_EVIDENCE_PROVIDER=<provider-id>
 ```
 
-The `.env` file is ignored by Git and must never be committed. Restart the local server after changing it.
+The repository includes an optional bundled Google Fact Check Tools adapter for development/testing. If you want to use it, configure its key in `.env`. Developers can instead register another API, search service, RAG system, database, or self-hosted retriever without changing the verifier.
 
-Without this key, URL extraction still works, but VerifyIt deliberately keeps factual verdicts `UNVERIFIED` because no external fact-check evidence provider is configured.
+See `docs/evidence-providers.md` for the provider contract and extension instructions.
+
+The `.env` file is ignored by Git and must never be committed.
 
 ### Run tests
 
@@ -91,15 +98,17 @@ verifyit/
 
 ## Evidence behavior
 
-For URLs, VerifyIt applies application-level SSRF defenses, follows only re-validated redirects, limits download size/time, extracts readable HTML/text, and reports login walls or unsupported media instead of inventing the hidden content.
+For URLs, VerifyIt applies application-level SSRF defenses, follows only re-validated redirects, limits download size/time, extracts readable HTML/text, and reports login walls or unsupported media instead of inventing hidden content.
 
-For published fact checks, a search result is not automatically treated as truth. The reviewed claim must substantially match the submitted/extracted context, and matched normalized ratings must agree before a non-`UNVERIFIED` verdict is produced.
+For social links, generic platform shells are classified as `platform_only`, not `accessed`. If only meaningful public post metadata is available, the result is `partial` and VerifyIt explicitly warns that media/context were not fully inspected.
 
-See `docs/evidence-pipeline.md` for details and limitations.
+For published evidence, a search result is not automatically treated as truth. The reviewed claim must substantially match the submitted/extracted context, and matched normalized ratings must agree before a non-`UNVERIFIED` verdict is produced.
+
+See `docs/evidence-pipeline.md` and `docs/evidence-providers.md` for details and limitations.
 
 ## Roadmap
 
-1. **In progress:** evidence providers and source ranking beyond existing fact checks
+1. **In progress:** general evidence providers and source ranking beyond existing fact checks
 2. **Implemented (MVP):** safe URL/content extraction
 3. **Implemented (MVP):** existing fact-check lookup
 4. Scam and hidden-payment analysis

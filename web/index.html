@@ -30,7 +30,7 @@
   <main>
     <div class="eyebrow">VerifyIt MVP · 0.2</div>
     <h1>Check before you believe, pay, or share.</h1>
-    <p class="lead">Paste a claim or public link. VerifyIt inspects accessible pages and, when configured, searches published fact checks. It keeps uncertain or inaccessible content explicitly unverified.</p>
+    <p class="lead">Paste a claim or public link. VerifyIt inspects content it can actually access and, when configured, searches external evidence sources. Uncertain or inaccessible content stays explicitly unverified.</p>
 
     <section class="card">
       <form id="verify-form">
@@ -59,6 +59,16 @@
     const warnings = document.getElementById('warnings');
     const evidence = document.getElementById('evidence');
 
+    const extractionLabels = {
+      not_applicable: 'not applicable',
+      accessed: 'page accessed',
+      partial: 'partially accessible',
+      platform_only: 'platform reached; post unavailable',
+      blocked: 'content blocked',
+      fetch_failed: 'fetch failed',
+      rejected: 'URL rejected'
+    };
+
     function escapeHtml(value) {
       return String(value ?? '').replace(/[&<>'"]/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
     }
@@ -80,7 +90,8 @@
 
         verdict.textContent = `${data.verdict} · ${Math.round((data.confidence || 0) * 100)}%`;
         summary.textContent = data.summary;
-        meta.textContent = `Input: ${data.detected_input_type} · Extraction: ${data.extraction_status}${data.extracted_title ? ' · ' + data.extracted_title : ''}`;
+        const extractionLabel = extractionLabels[data.extraction_status] || data.extraction_status;
+        meta.textContent = `Input: ${data.detected_input_type} · Extraction: ${extractionLabel}${data.extracted_title ? ' · ' + data.extracted_title : ''}`;
         warnings.innerHTML = (data.warnings || []).map(item => `<div class="warning">${escapeHtml(item)}</div>`).join('');
 
         if (data.evidence && data.evidence.length) {
