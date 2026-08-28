@@ -18,6 +18,15 @@ class InputType(str, Enum):
     URL = "url"
 
 
+class ExtractionStatus(str, Enum):
+    NOT_APPLICABLE = "not_applicable"
+    ACCESSED = "accessed"
+    PARTIAL = "partial"
+    BLOCKED = "blocked"
+    FETCH_FAILED = "fetch_failed"
+    REJECTED = "rejected"
+
+
 class VerifyRequest(BaseModel):
     content: str = Field(min_length=1, max_length=20_000)
     input_type: InputType = InputType.AUTO
@@ -28,6 +37,11 @@ class EvidenceItem(BaseModel):
     url: str
     source_type: str
     supports_claim: bool | None = None
+    publisher: str | None = None
+    rating: str | None = None
+    review_date: str | None = None
+    claim_text: str | None = None
+    match_score: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class VerifyResponse(BaseModel):
@@ -38,3 +52,7 @@ class VerifyResponse(BaseModel):
     summary: str
     evidence: list[EvidenceItem] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    detected_input_type: InputType = InputType.TEXT
+    source_url: str | None = None
+    extraction_status: ExtractionStatus = ExtractionStatus.NOT_APPLICABLE
+    extracted_title: str | None = None

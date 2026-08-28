@@ -8,25 +8,29 @@
     :root { font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #171717; background: #f6f7f8; }
     * { box-sizing: border-box; }
     body { margin: 0; }
-    main { width: min(760px, calc(100% - 32px)); margin: 56px auto; }
+    main { width: min(820px, calc(100% - 32px)); margin: 48px auto; }
     .eyebrow { font-weight: 700; letter-spacing: .08em; text-transform: uppercase; font-size: .75rem; }
     h1 { font-size: clamp(2.2rem, 7vw, 4.5rem); line-height: .95; margin: 12px 0 16px; }
-    .lead { font-size: 1.08rem; line-height: 1.6; max-width: 640px; }
+    .lead { font-size: 1.08rem; line-height: 1.6; max-width: 680px; }
     .card { background: white; border: 1px solid #dedede; border-radius: 18px; padding: 22px; margin-top: 28px; box-shadow: 0 12px 40px rgba(0,0,0,.05); }
     textarea { width: 100%; min-height: 180px; resize: vertical; border: 1px solid #ccc; border-radius: 12px; padding: 14px; font: inherit; }
     button { margin-top: 12px; border: 0; border-radius: 999px; padding: 12px 18px; font: inherit; font-weight: 700; cursor: pointer; background: #171717; color: white; }
     button:disabled { opacity: .5; cursor: wait; }
     #result { display: none; margin-top: 20px; border-top: 1px solid #e6e6e6; padding-top: 20px; }
     .verdict { font-size: 1.4rem; font-weight: 800; }
-    .warning { padding: 12px; border-radius: 10px; background: #fff4d6; line-height: 1.5; }
-    code { background: #eee; border-radius: 5px; padding: 2px 5px; }
+    .meta { font-size: .9rem; color: #555; line-height: 1.5; }
+    .warning { padding: 12px; border-radius: 10px; background: #fff4d6; line-height: 1.5; margin-top: 10px; }
+    .evidence { margin-top: 18px; }
+    .evidence article { border-top: 1px solid #e8e8e8; padding: 12px 0; }
+    .evidence a { color: inherit; font-weight: 700; }
+    .rating { font-weight: 700; }
   </style>
 </head>
 <body>
   <main>
-    <div class="eyebrow">VerifyIt MVP</div>
+    <div class="eyebrow">VerifyIt MVP · 0.2</div>
     <h1>Check before you believe, pay, or share.</h1>
-    <p class="lead">Paste a claim or link. This first development build establishes the verification interface; it deliberately refuses to invent a verdict until evidence retrieval is connected.</p>
+    <p class="lead">Paste a claim or public link. VerifyIt inspects accessible pages and, when configured, searches published fact checks. It keeps uncertain or inaccessible content explicitly unverified.</p>
 
     <section class="card">
       <form id="verify-form">
@@ -38,7 +42,9 @@
       <div id="result">
         <div id="verdict" class="verdict"></div>
         <p id="summary"></p>
-        <div id="warning" class="warning"></div>
+        <div id="meta" class="meta"></div>
+        <div id="warnings"></div>
+        <div id="evidence" class="evidence"></div>
       </div>
     </section>
   </main>
@@ -49,7 +55,13 @@
     const result = document.getElementById('result');
     const verdict = document.getElementById('verdict');
     const summary = document.getElementById('summary');
-    const warning = document.getElementById('warning');
+    const meta = document.getElementById('meta');
+    const warnings = document.getElementById('warnings');
+    const evidence = document.getElementById('evidence');
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>'"]/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
+    }
 
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
@@ -64,15 +76,30 @@
           body: JSON.stringify({ content: document.getElementById('content').value, input_type: 'auto' })
         });
         const data = await response.json();
-        if (!response.ok) throw new Error('Request failed');
-        verdict.textContent = data.verdict;
+        if (!response.ok) throw new Error(data.detail || 'Request failed');
+
+        verdict.textContent = `${data.verdict} · ${Math.round((data.confidence || 0) * 100)}%`;
         summary.textContent = data.summary;
-        warning.textContent = data.warnings[0] || 'No warning.';
+        meta.textContent = `Input: ${data.detected_input_type} · Extraction: ${data.extraction_status}${data.extracted_title ? ' · ' + data.extracted_title : ''}`;
+        warnings.innerHTML = (data.warnings || []).map(item => `<div class="warning">${escapeHtml(item)}</div>`).join('');
+
+        if (data.evidence && data.evidence.length) {
+          evidence.innerHTML = '<strong>Evidence</strong>' + data.evidence.map(item => `
+            <article>
+              <a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title)}</a>
+              <div class="meta">${escapeHtml(item.publisher || 'Unknown publisher')}${item.review_date ? ' · ' + escapeHtml(item.review_date) : ''}${item.match_score != null ? ' · match ' + Math.round(item.match_score * 100) + '%' : ''}</div>
+              ${item.rating ? `<div class="rating">Rating: ${escapeHtml(item.rating)}</div>` : ''}
+              ${item.claim_text ? `<div class="meta">Reviewed claim: ${escapeHtml(item.claim_text)}</div>` : ''}
+            </article>`).join('');
+        } else {
+          evidence.innerHTML = '';
+        }
         result.style.display = 'block';
       } catch (error) {
         verdict.textContent = 'ERROR';
         summary.textContent = 'The local VerifyIt API could not process this request.';
-        warning.textContent = String(error);
+        warnings.innerHTML = `<div class="warning">${escapeHtml(error)}</div>`;
+        evidence.innerHTML = '';
         result.style.display = 'block';
       } finally {
         button.disabled = false;
