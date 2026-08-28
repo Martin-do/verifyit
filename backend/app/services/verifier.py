@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 from uuid import uuid4
 
 from app.models import EvidenceItem, ExtractionStatus, InputType, VerifyRequest, VerifyResponse, Verdict
 from app.services.evidence_provider import EvidenceProviderError, get_configured_evidence_provider
 from app.services.factcheck import consensus_verdict
 from app.services.url_extractor import fetch_url, looks_like_url
+
+
+logger = logging.getLogger("verifyit.evidence")
 
 
 def _detected_type(request: VerifyRequest) -> InputType:
@@ -164,7 +168,12 @@ def verify(request: VerifyRequest) -> VerifyResponse:
 
     try:
         hits = provider.search(search_query, verification_context)
-    except EvidenceProviderError:
+    except EvidenceProviderError as exc:
+        logger.warning(
+            "Evidence provider '%s' failed: %s",
+            getattr(provider, "provider_id", "unknown"),
+            exc,
+        )
         warnings.append("External evidence search is temporarily unavailable. No verdict was inferred without supporting evidence.")
         return VerifyResponse(
             request_id=str(uuid4()),
