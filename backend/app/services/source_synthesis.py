@@ -22,6 +22,14 @@ REFUTATION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Useful when selecting what to display, but deliberately not sufficient by itself to
+# make a stance decisive. Phrases such as "less likely" are informative answers yet
+# are weaker than an explicit "cannot" or "not" for verdict synthesis.
+QUALIFIED_ANSWER_RE = re.compile(
+    r"\b(?:unlikely|less\s+likely|highly\s+unlikely|doubtful)\b|\banswer\b.{0,40}\bno\b",
+    re.IGNORECASE,
+)
+
 
 def _sentences(text: str) -> list[str]:
     cleaned = re.sub(r"\s+", " ", text or "").strip()
@@ -37,6 +45,10 @@ def _is_negated(text: str) -> bool:
 
 def _has_refutation(text: str) -> bool:
     return bool(REFUTATION_RE.search(text or ""))
+
+
+def _has_selection_signal(text: str) -> bool:
+    return _is_negated(text) or _has_refutation(text) or bool(QUALIFIED_ANSWER_RE.search(text or ""))
 
 
 def _starts_with_question(text: str) -> bool:
@@ -60,15 +72,15 @@ def _passage_selection_score(claim: str, passage: str) -> tuple[float, float]:
 
     Search/article titles often repeat a claim verbatim as a question. They are highly
     lexically relevant but contain no answer. Prefer substantive declarative windows,
-    especially those carrying explicit negation/refutation language, without changing
-    the underlying claim-overlap score used by the stance classifier.
+    especially those carrying answer/refutation language, without changing the
+    underlying claim-overlap score used by the stance classifier.
     """
 
     relevance = lexical_relevance(claim, passage, None)
-    stance_signal = _is_negated(passage) or _has_refutation(passage)
+    selection_signal = _has_selection_signal(passage)
 
     score = relevance
-    if stance_signal:
+    if selection_signal:
         score += 0.18
 
     word_count = len(re.findall(r"[a-z0-9]+", passage.lower()))
@@ -77,8 +89,8 @@ def _passage_selection_score(claim: str, passage: str) -> tuple[float, float]:
 
     if _question_only(passage):
         score -= 0.30
-    elif _starts_with_question(passage) and not stance_signal:
-        score -= 0.22
+    elif _starts_with_question(passage) and not selection_signal:
+        score -= 0.38
 
     return score, relevance
 
@@ -105,7 +117,7 @@ def best_passage(claim: str, text: str, *, max_sentences: int = 2) -> tuple[str 
         scored,
         key=lambda item: (item[0], item[1], len(item[2])),
     )
-    if relevance < 0.45:
+    if relevance < 0.40:
         return None, round(relevance, 4)
 
     return passage[:1800], round(relevance, 4)
