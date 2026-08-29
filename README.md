@@ -29,7 +29,7 @@ VerifyIt aims to reduce that to one action.
 
 ## Current milestone
 
-VerifyIt 0.2 can inspect accessible public HTTP/HTTPS pages and can use a configured evidence provider. The repository currently ships one published-fact-check adapter as an MVP example, but the verification engine itself is provider-neutral.
+VerifyIt 0.3 can inspect accessible public HTTP/HTTPS pages, retrieve general web evidence through a configured provider, and rank candidate sources by authority, relevance, and freshness. Search snippets are **not** treated as sufficient evidence for a factual verdict, so general-search-only checks remain `UNVERIFIED` until full claim-versus-source synthesis is implemented.
 
 Social-media HTML is treated more cautiously than ordinary webpages. A platform returning a generic shell does **not** mean the underlying post was accessed. VerifyIt distinguishes full page access, partial public metadata, platform-only responses, blocked/login-wall content, fetch failures, and rejected URLs.
 
@@ -67,23 +67,33 @@ On Windows PowerShell:
 Copy-Item .env.example .env
 ```
 
-A registered provider can be selected with:
+Select a registered provider:
 
 ```text
 VERIFYIT_EVIDENCE_PROVIDER=<provider-id>
 ```
 
-The repository includes an optional bundled published-fact-check adapter for development/testing. Its current upstream service requires OAuth-authenticated credentials, so the adapter uses Google Application Default Credentials (ADC) rather than an API key. Developers can instead register another API, search service, RAG system, database, or self-hosted retriever without changing the verifier.
+Bundled adapters currently include:
 
-For local ADC setup, install the Google Cloud CLI and create credentials with the required Fact Check Tools scope. Because this is a non-default OAuth scope, use your own OAuth client configuration when creating local ADC credentials:
+- `tavily` — simple API-key-based general web search, recommended for local MVP testing.
+- `searxng` — points VerifyIt at an operator-controlled/self-hosted SearXNG instance with JSON search enabled.
+- `google_factcheck` — optional published-fact-check adapter using OAuth credentials; not required for normal development.
 
-```bash
-gcloud auth application-default login \
-  --client-id-file=PATH_TO_CLIENT_JSON \
-  --scopes=https://www.googleapis.com/auth/factchecktools,https://www.googleapis.com/auth/cloud-platform
+Example local Tavily configuration:
+
+```text
+VERIFYIT_EVIDENCE_PROVIDER=tavily
+TAVILY_API_KEY=your_key_here
 ```
 
-VerifyIt then discovers those credentials automatically through `google-auth`. Production deployments should use an appropriate ADC-supported workload identity rather than storing secrets in the repository.
+Example SearXNG configuration:
+
+```text
+VERIFYIT_EVIDENCE_PROVIDER=searxng
+SEARXNG_BASE_URL=https://your-search-instance.example
+```
+
+Developers can register another API, search service, RAG system, database, or self-hosted retriever without changing the verifier.
 
 See `docs/evidence-providers.md` for the provider contract and extension instructions.
 
@@ -112,21 +122,24 @@ For URLs, VerifyIt applies application-level SSRF defenses, follows only re-vali
 
 For social links, generic platform shells are classified as `platform_only`, not `accessed`. If only meaningful public post metadata is available, the result is `partial` and VerifyIt explicitly warns that media/context were not fully inspected.
 
-For published evidence, a search result is not automatically treated as truth. The reviewed claim must substantially match the submitted/extracted context, and matched normalized ratings must agree before a non-`UNVERIFIED` verdict is produced.
+For general web search, VerifyIt ranks candidate evidence using a documented heuristic. Government/official/academic/fact-check sources receive stronger authority priors than generic pages or social platforms, while relevance remains a major part of the score. **Authority ranking is not itself proof that a claim is true.**
+
+For published fact checks, a reviewed claim must substantially match the submitted/extracted context, and matched normalized ratings must agree before a non-`UNVERIFIED` verdict is produced.
 
 See `docs/evidence-pipeline.md` and `docs/evidence-providers.md` for details and limitations.
 
 ## Roadmap
 
-1. **In progress:** general evidence providers and source ranking beyond existing fact checks
-2. **Implemented (MVP):** safe URL/content extraction
-3. **Implemented (MVP):** existing fact-check lookup
-4. Scam and hidden-payment analysis
-5. Screenshot/image input
-6. Video/Reel analysis
-7. Browser and Android share integrations
-8. X/Instagram/WhatsApp adapters
-9. Public verification pages and duplicate-claim detection
+1. **Implemented (retrieval/ranking):** general evidence providers and source ranking
+2. **Next:** fetch top evidence pages and compare their actual content with the claim
+3. **Implemented (MVP):** safe URL/content extraction
+4. **Implemented (optional):** existing fact-check lookup
+5. Scam and hidden-payment analysis
+6. Screenshot/image input
+7. Video/Reel analysis
+8. Browser and Android share integrations
+9. X/Instagram/WhatsApp adapters
+10. Public verification pages and duplicate-claim detection
 
 ## Status
 
