@@ -12,6 +12,12 @@ class Verdict(str, Enum):
     SCAM_RISK = "SCAM_RISK"
 
 
+class SourceStance(str, Enum):
+    SUPPORTS = "SUPPORTS"
+    CONTRADICTS = "CONTRADICTS"
+    UNCLEAR = "UNCLEAR"
+
+
 class InputType(str, Enum):
     AUTO = "auto"
     TEXT = "text"
@@ -38,6 +44,10 @@ class EvidenceItem(BaseModel):
     url: str
     source_type: str
     supports_claim: bool | None = None
+    stance: SourceStance | None = None
+    stance_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    passage: str | None = None
+    passage_relevance: float | None = Field(default=None, ge=0.0, le=1.0)
     publisher: str | None = None
     snippet: str | None = None
     rating: str | None = None
