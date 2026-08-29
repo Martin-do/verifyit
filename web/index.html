@@ -25,14 +25,16 @@
     .evidence a { color: inherit; font-weight: 750; }
     .rating { font-weight: 700; }
     .snippet { line-height: 1.5; margin-top: 6px; }
+    .passage { line-height: 1.55; margin-top: 9px; padding: 10px 12px; background: #f5f5f5; border-radius: 9px; }
     .badge { display: inline-block; padding: 3px 8px; margin: 6px 6px 0 0; border: 1px solid #ddd; border-radius: 999px; font-size: .78rem; color: #444; }
+    .stance { font-weight: 800; }
   </style>
 </head>
 <body>
   <main>
-    <div class="eyebrow">VerifyIt MVP · 0.3</div>
+    <div class="eyebrow">VerifyIt MVP · 0.4</div>
     <h1>Check before you believe, pay, or share.</h1>
-    <p class="lead">Paste a claim or public link. VerifyIt inspects content it can actually access, retrieves external evidence when configured, and ranks candidate sources by relevance and source quality. Uncertain content stays explicitly unverified.</p>
+    <p class="lead">Paste a claim or public link. VerifyIt retrieves candidate evidence, inspects strong source pages, and keeps uncertain or conflicting claims explicitly unverified.</p>
 
     <section class="card">
       <form id="verify-form">
@@ -62,22 +64,15 @@
     const evidence = document.getElementById('evidence');
 
     const extractionLabels = {
-      not_applicable: 'not applicable',
-      accessed: 'page accessed',
-      partial: 'partially accessible',
-      platform_only: 'platform reached; post unavailable',
-      blocked: 'content blocked',
-      fetch_failed: 'fetch failed',
-      rejected: 'URL rejected'
+      not_applicable: 'not applicable', accessed: 'page accessed', partial: 'partially accessible',
+      platform_only: 'platform reached; post unavailable', blocked: 'content blocked',
+      fetch_failed: 'fetch failed', rejected: 'URL rejected'
     };
 
     function escapeHtml(value) {
       return String(value ?? '').replace(/[&<>'"]/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
     }
-
-    function pct(value) {
-      return value == null ? null : Math.round(Number(value) * 100) + '%';
-    }
+    function pct(value) { return value == null ? null : Math.round(Number(value) * 100) + '%'; }
 
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
@@ -87,8 +82,7 @@
 
       try {
         const response = await fetch('/api/v1/verify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ content: document.getElementById('content').value, input_type: 'auto' })
         });
         const data = await response.json();
@@ -101,17 +95,19 @@
         warnings.innerHTML = (data.warnings || []).map(item => `<div class="warning">${escapeHtml(item)}</div>`).join('');
 
         if (data.evidence && data.evidence.length) {
-          evidence.innerHTML = '<strong>Ranked evidence</strong>' + data.evidence.map(item => `
+          evidence.innerHTML = '<strong>Evidence</strong>' + data.evidence.map(item => `
             <article>
               <a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title)}</a>
               <div>
+                ${item.stance ? `<span class="badge stance">${escapeHtml(item.stance)}</span>` : ''}
                 ${item.source_label ? `<span class="badge">${escapeHtml(item.source_label)}</span>` : ''}
                 ${item.quality_score != null ? `<span class="badge">quality ${pct(item.quality_score)}</span>` : ''}
                 ${item.authority_score != null ? `<span class="badge">authority ${pct(item.authority_score)}</span>` : ''}
-                ${item.relevance_score != null ? `<span class="badge">relevance ${pct(item.relevance_score)}</span>` : ''}
+                ${item.relevance_score != null ? `<span class="badge">search relevance ${pct(item.relevance_score)}</span>` : ''}
+                ${item.stance_score != null && item.stance !== 'UNCLEAR' ? `<span class="badge">stance confidence ${pct(item.stance_score)}</span>` : ''}
               </div>
               <div class="meta">${escapeHtml(item.publisher || '')}${item.review_date ? (item.publisher ? ' · ' : '') + escapeHtml(item.review_date) : ''}${item.match_score != null ? ' · claim match ' + pct(item.match_score) : ''}</div>
-              ${item.snippet ? `<div class="snippet">${escapeHtml(item.snippet)}</div>` : ''}
+              ${item.passage ? `<div class="passage"><strong>Inspected passage</strong><br>${escapeHtml(item.passage)}</div>` : (item.snippet ? `<div class="snippet">${escapeHtml(item.snippet)}</div>` : '')}
               ${item.rating ? `<div class="rating">Published rating: ${escapeHtml(item.rating)}</div>` : ''}
               ${item.claim_text ? `<div class="meta">Reviewed claim: ${escapeHtml(item.claim_text)}</div>` : ''}
             </article>`).join('');
