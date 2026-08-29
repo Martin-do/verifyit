@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.models import Verdict
+from app.models import SourceStance, Verdict
 
 
 @dataclass
@@ -25,3 +25,7 @@ class EvidenceHit:
     freshness_score: float | None = None
     quality_score: float | None = None
     source_label: str | None = None
+    passage: str | None = None
+    passage_relevance: float | None = None
+    stance: SourceStance | None = None
+    stance_score: float | None = None

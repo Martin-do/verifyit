@@ -7,6 +7,7 @@ from app.models import EvidenceItem, ExtractionStatus, InputType, VerifyRequest,
 from app.services.evidence_provider import EvidenceProviderError, get_configured_evidence_provider
 from app.services.evidence_types import EvidenceHit
 from app.services.source_ranker import rank_evidence
+from app.services.source_synthesis import synthesize_sources
 from app.services.url_extractor import fetch_url, looks_like_url
 
 
@@ -41,6 +42,10 @@ def _evidence_from_hits(hits: list[EvidenceHit], limit: int = 8) -> list[Evidenc
                 authority_score=hit.authority_score,
                 relevance_score=hit.relevance_score,
                 quality_score=hit.quality_score,
+                stance=hit.stance,
+                stance_score=hit.stance_score,
+                passage=hit.passage,
+                passage_relevance=hit.passage_relevance,
             )
         )
         if len(evidence) >= limit:
@@ -110,26 +115,16 @@ def verify(request: VerifyRequest) -> VerifyResponse:
 
         if page.status in {ExtractionStatus.REJECTED, ExtractionStatus.FETCH_FAILED}:
             return VerifyResponse(
-                request_id=str(uuid4()),
-                verdict=Verdict.UNVERIFIED,
-                confidence=0.0,
-                claim=content,
+                request_id=str(uuid4()), verdict=Verdict.UNVERIFIED, confidence=0.0, claim=content,
                 summary="VerifyIt could not safely inspect the submitted URL, so no factual verdict was assigned.",
-                warnings=warnings,
-                detected_input_type=detected,
-                source_url=source_url,
-                extraction_status=extraction_status,
-                extracted_title=extracted_title,
+                warnings=warnings, detected_input_type=detected, source_url=source_url,
+                extraction_status=extraction_status, extracted_title=extracted_title,
             )
 
         if page.status in {ExtractionStatus.BLOCKED, ExtractionStatus.PLATFORM_ONLY}:
             return _unavailable_social_response(
-                content=content,
-                detected=detected,
-                source_url=source_url,
-                extraction_status=extraction_status,
-                extracted_title=extracted_title,
-                warnings=warnings,
+                content=content, detected=detected, source_url=source_url,
+                extraction_status=extraction_status, extracted_title=extracted_title, warnings=warnings,
             )
 
         if page.title:
@@ -147,37 +142,21 @@ def verify(request: VerifyRequest) -> VerifyResponse:
 
     provider = get_configured_evidence_provider()
     if provider is None:
-        warnings.append(
-            "External evidence search is not configured. VerifyIt inspected the available content but cannot perform independent evidence retrieval yet."
-        )
+        warnings.append("External evidence search is not configured. VerifyIt inspected the available content but cannot perform independent evidence retrieval yet.")
         return VerifyResponse(
-            request_id=str(uuid4()),
-            verdict=Verdict.UNVERIFIED,
-            confidence=0.0,
-            claim=claim,
+            request_id=str(uuid4()), verdict=Verdict.UNVERIFIED, confidence=0.0, claim=claim,
             summary="VerifyIt inspected the input where possible, but no external evidence provider is configured, so it will not guess a verdict.",
-            evidence=[],
-            warnings=warnings,
-            detected_input_type=detected,
-            source_url=source_url,
-            extraction_status=extraction_status,
-            extracted_title=extracted_title,
+            evidence=[], warnings=warnings, detected_input_type=detected, source_url=source_url,
+            extraction_status=extraction_status, extracted_title=extracted_title,
         )
 
     if not search_query.strip():
         warnings.append("There was not enough extractable text to search for external evidence.")
         return VerifyResponse(
-            request_id=str(uuid4()),
-            verdict=Verdict.UNVERIFIED,
-            confidence=0.0,
-            claim=claim,
-            summary="VerifyIt could not form a reliable evidence query from the submitted content.",
-            evidence=[],
-            warnings=warnings,
-            detected_input_type=detected,
-            source_url=source_url,
-            extraction_status=extraction_status,
-            extracted_title=extracted_title,
+            request_id=str(uuid4()), verdict=Verdict.UNVERIFIED, confidence=0.0, claim=claim,
+            summary="VerifyIt could not form a reliable evidence query from the submitted content.", evidence=[],
+            warnings=warnings, detected_input_type=detected, source_url=source_url,
+            extraction_status=extraction_status, extracted_title=extracted_title,
         )
 
     try:
@@ -186,15 +165,9 @@ def verify(request: VerifyRequest) -> VerifyResponse:
         logger.warning("Evidence provider '%s' failed: %s", getattr(provider, "provider_id", "unknown"), exc)
         warnings.append("External evidence search is temporarily unavailable. No verdict was inferred without supporting evidence.")
         return VerifyResponse(
-            request_id=str(uuid4()),
-            verdict=Verdict.UNVERIFIED,
-            confidence=0.0,
-            claim=claim,
-            summary="Evidence retrieval failed, so VerifyIt did not assign a factual verdict.",
-            warnings=warnings,
-            detected_input_type=detected,
-            source_url=source_url,
-            extraction_status=extraction_status,
+            request_id=str(uuid4()), verdict=Verdict.UNVERIFIED, confidence=0.0, claim=claim,
+            summary="Evidence retrieval failed, so VerifyIt did not assign a factual verdict.", warnings=warnings,
+            detected_input_type=detected, source_url=source_url, extraction_status=extraction_status,
             extracted_title=extracted_title,
         )
 
@@ -206,62 +179,63 @@ def verify(request: VerifyRequest) -> VerifyResponse:
         verdict, confidence, matched_hits, conflicting = _factcheck_consensus(factcheck_hits)
         evidence_hits = matched_hits if matched_hits else [hit for hit in factcheck_hits if (hit.match_score or 0.0) >= 0.35]
         evidence = _evidence_from_hits(rank_evidence(evidence_hits, search_query))
-
         if conflicting:
             warnings.append("Matching evidence reviews produced conflicting normalized ratings, so VerifyIt kept the verdict UNVERIFIED.")
         elif factcheck_hits and not matched_hits:
             warnings.append("Published fact checks were found, but their claims did not match the submitted content closely enough for a verdict.")
-
         summary = (
             f"VerifyIt found matching published evidence and the matched reviews support the verdict {verdict.value}."
             if verdict != Verdict.UNVERIFIED
             else "VerifyIt found related published evidence, but it was not strong or consistent enough to assign a factual verdict safely."
         )
         return VerifyResponse(
-            request_id=str(uuid4()),
-            verdict=verdict,
-            confidence=confidence,
-            claim=claim,
-            summary=summary,
-            evidence=evidence,
-            warnings=warnings,
-            detected_input_type=detected,
-            source_url=source_url,
-            extraction_status=extraction_status,
-            extracted_title=extracted_title,
+            request_id=str(uuid4()), verdict=verdict, confidence=confidence, claim=claim, summary=summary,
+            evidence=evidence, warnings=warnings, detected_input_type=detected, source_url=source_url,
+            extraction_status=extraction_status, extracted_title=extracted_title,
         )
 
     if web_hits:
+        if len(web_hits) >= 2:
+            verdict, confidence, inspected_hits, conflicting = synthesize_sources(claim, web_hits)
+            inspected_urls = {hit.url for hit in inspected_hits}
+            display_hits = inspected_hits + [hit for hit in web_hits if hit.url not in inspected_urls]
+            evidence = _evidence_from_hits(display_hits)
+
+            decisive = [hit for hit in inspected_hits if hit.stance is not None and hit.stance.value != "UNCLEAR"]
+            if conflicting:
+                warnings.append("Fetched sources produced conflicting explicit stances, so VerifyIt kept the verdict UNVERIFIED.")
+            elif verdict == Verdict.UNVERIFIED:
+                warnings.append(
+                    "VerifyIt fetched the strongest candidate pages, but fewer than two independent sources provided sufficiently explicit, consistent passages for a safe verdict."
+                )
+            else:
+                warnings.append("The verdict is based on fetched source passages, not search-result snippets.")
+
+            if verdict != Verdict.UNVERIFIED:
+                direction = "support" if verdict == Verdict.VERIFIED else "contradict"
+                summary = f"VerifyIt inspected {len(inspected_hits)} strong sources; {len(decisive)} provided explicit passages that consistently {direction} the claim."
+            else:
+                summary = f"VerifyIt retrieved ranked evidence and inspected {len(inspected_hits)} strong source pages, but the evidence threshold for a factual verdict was not met."
+
+            return VerifyResponse(
+                request_id=str(uuid4()), verdict=verdict, confidence=confidence, claim=claim, summary=summary,
+                evidence=evidence, warnings=warnings, detected_input_type=detected, source_url=source_url,
+                extraction_status=extraction_status, extracted_title=extracted_title,
+            )
+
         evidence = _evidence_from_hits(web_hits)
-        warnings.append(
-            "VerifyIt has retrieved and ranked candidate sources, but automated claim-versus-source synthesis is not enabled yet. "
-            "Search-result snippets alone are not enough for a factual verdict."
-        )
+        warnings.append("VerifyIt found only one candidate source. A single search result is not enough for a factual verdict.")
         return VerifyResponse(
-            request_id=str(uuid4()),
-            verdict=Verdict.UNVERIFIED,
-            confidence=0.0,
-            claim=claim,
-            summary=f"VerifyIt retrieved and ranked {len(evidence)} external sources for inspection without guessing a verdict.",
-            evidence=evidence,
-            warnings=warnings,
-            detected_input_type=detected,
-            source_url=source_url,
-            extraction_status=extraction_status,
-            extracted_title=extracted_title,
+            request_id=str(uuid4()), verdict=Verdict.UNVERIFIED, confidence=0.0, claim=claim,
+            summary="VerifyIt retrieved a candidate source but requires independent corroboration before assigning a verdict.",
+            evidence=evidence, warnings=warnings, detected_input_type=detected, source_url=source_url,
+            extraction_status=extraction_status, extracted_title=extracted_title,
         )
 
     warnings.append("No external evidence matched the evidence query.")
     return VerifyResponse(
-        request_id=str(uuid4()),
-        verdict=Verdict.UNVERIFIED,
-        confidence=0.0,
-        claim=claim,
-        summary="VerifyIt could not find sufficient matching evidence to assign a factual verdict.",
-        evidence=[],
-        warnings=warnings,
-        detected_input_type=detected,
-        source_url=source_url,
-        extraction_status=extraction_status,
-        extracted_title=extracted_title,
+        request_id=str(uuid4()), verdict=Verdict.UNVERIFIED, confidence=0.0, claim=claim,
+        summary="VerifyIt could not find sufficient matching evidence to assign a factual verdict.", evidence=[],
+        warnings=warnings, detected_input_type=detected, source_url=source_url,
+        extraction_status=extraction_status, extracted_title=extracted_title,
     )
