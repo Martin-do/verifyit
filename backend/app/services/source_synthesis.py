@@ -10,9 +10,23 @@ from app.services.source_ranker import lexical_relevance
 from app.services.url_extractor import ExtractedPage, fetch_url
 
 
-NEGATION_RE = re.compile(
+DIRECT_NEGATION_RE = re.compile(
     r"\b(?:no|not|never|cannot|can't|cant|couldn't|couldnt|isn't|isnt|aren't|arent|"
-    r"wasn't|wasnt|weren't|werent|won't|wont|without|impossible|false|myth|incorrect)\b",
+    r"wasn't|wasnt|weren't|werent|won't|wont|without|impossible)\b",
+    re.IGNORECASE,
+)
+
+REFUTATION_RE = re.compile(
+    r"\b(?:myth|misconception|false|incorrect|untrue|baseless|bogus|hoax|debunked|"
+    r"disproved|refuted)\b|\bnot\s+true\b",
+    re.IGNORECASE,
+)
+
+# Useful when selecting what to display, but deliberately not sufficient by itself to
+# make a stance decisive. Phrases such as "less likely" are informative answers yet
+# are weaker than an explicit "cannot" or "not" for verdict synthesis.
+QUALIFIED_ANSWER_RE = re.compile(
+    r"\b(?:unlikely|less\s+likely|highly\s+unlikely|doubtful)\b|\banswer\b.{0,40}\bno\b",
     re.IGNORECASE,
 )
 
@@ -21,37 +35,92 @@ def _sentences(text: str) -> list[str]:
     cleaned = re.sub(r"\s+", " ", text or "").strip()
     if not cleaned:
         return []
-    parts = re.split(r"(?<=[.!?])\s+|\s*[\n\r]+\s*", cleaned)
+    parts = re.split(r"(?<=[.!?])\s+", cleaned)
     return [part.strip() for part in parts if len(part.strip()) >= 20]
 
 
 def _is_negated(text: str) -> bool:
-    return bool(NEGATION_RE.search(text or ""))
+    return bool(DIRECT_NEGATION_RE.search(text or ""))
+
+
+def _has_refutation(text: str) -> bool:
+    return bool(REFUTATION_RE.search(text or ""))
+
+
+def _has_selection_signal(text: str) -> bool:
+    return _is_negated(text) or _has_refutation(text) or bool(QUALIFIED_ANSWER_RE.search(text or ""))
+
+
+def _starts_with_question(text: str) -> bool:
+    candidate = (text or "").strip()
+    if not candidate:
+        return False
+    question_at = candidate.find("?")
+    return 0 <= question_at < min(len(candidate), 220)
+
+
+def _question_only(text: str) -> bool:
+    candidate = (text or "").strip()
+    if not candidate:
+        return False
+    sentences = _sentences(candidate)
+    return bool(sentences) and all(sentence.rstrip().endswith("?") for sentence in sentences)
+
+
+def _passage_selection_score(claim: str, passage: str) -> tuple[float, float]:
+    """Score passage selection separately from the relevance value exposed downstream.
+
+    Search/article titles often repeat a claim verbatim as a question. They are highly
+    lexically relevant but contain no answer. Prefer substantive declarative windows,
+    especially those carrying answer/refutation language, without changing the
+    underlying claim-overlap score used by the stance classifier.
+    """
+
+    relevance = lexical_relevance(claim, passage, None)
+    selection_signal = _has_selection_signal(passage)
+
+    score = relevance
+    if selection_signal:
+        score += 0.18
+
+    word_count = len(re.findall(r"[a-z0-9]+", passage.lower()))
+    if word_count >= 18:
+        score += 0.04
+
+    if _question_only(passage):
+        score -= 0.30
+    elif _starts_with_question(passage) and not selection_signal:
+        score -= 0.38
+
+    return score, relevance
 
 
 def best_passage(claim: str, text: str, *, max_sentences: int = 2) -> tuple[str | None, float]:
-    """Return the most claim-relevant sentence window from fetched source text."""
+    """Return the most claim-relevant substantive sentence window from fetched text."""
 
-    scored: list[tuple[float, str]] = []
     sentences = _sentences(text)
-    for index, sentence in enumerate(sentences):
-        score = lexical_relevance(claim, sentence, None)
-        if index + 1 < len(sentences):
-            pair = f"{sentence} {sentences[index + 1]}"
-            pair_score = lexical_relevance(claim, pair, None)
-            if pair_score > score:
-                scored.append((pair_score, pair))
-        scored.append((score, sentence))
-
-    if not scored:
+    if not sentences:
         return None, 0.0
-    score, passage = max(scored, key=lambda item: item[0])
-    if score < 0.45:
-        return None, round(score, 4)
 
-    if max_sentences <= 1:
-        passage = re.split(r"(?<=[.!?])\s+", passage, maxsplit=1)[0]
-    return passage[:1800], round(score, 4)
+    scored: list[tuple[float, float, str]] = []
+    window_size = max(1, min(max_sentences, 3))
+
+    for index in range(len(sentences)):
+        for size in range(1, window_size + 1):
+            if index + size > len(sentences):
+                break
+            passage = " ".join(sentences[index : index + size])
+            selection_score, relevance = _passage_selection_score(claim, passage)
+            scored.append((selection_score, relevance, passage))
+
+    selection_score, relevance, passage = max(
+        scored,
+        key=lambda item: (item[0], item[1], len(item[2])),
+    )
+    if relevance < 0.40:
+        return None, round(relevance, 4)
+
+    return passage[:1800], round(relevance, 4)
 
 
 def classify_passage_stance(claim: str, passage: str | None, relevance: float) -> tuple[SourceStance, float]:
@@ -65,15 +134,25 @@ def classify_passage_stance(claim: str, passage: str | None, relevance: float) -
     if not passage or relevance < 0.62:
         return SourceStance.UNCLEAR, 0.0
 
-    claim_negated = _is_negated(claim)
-    passage_negated = _is_negated(passage)
+    if _question_only(passage):
+        return SourceStance.UNCLEAR, 0.0
 
-    # Require stronger overlap before using polarity as a stance signal. This avoids
-    # turning a loosely related negative sentence into a contradiction.
+    # Require stronger overlap before using polarity/refutation as a stance signal.
     if relevance < 0.72:
         return SourceStance.UNCLEAR, 0.0
 
-    stance = SourceStance.SUPPORTS if claim_negated == passage_negated else SourceStance.CONTRADICTS
+    claim_negated = _is_negated(claim)
+
+    if _has_refutation(passage):
+        # Refutation language reverses the proposition it targets. Remove those cue
+        # words before checking whether the embedded proposition itself is negated.
+        embedded = REFUTATION_RE.sub(" ", passage)
+        embedded_negated = _is_negated(embedded)
+        stance = SourceStance.CONTRADICTS if claim_negated == embedded_negated else SourceStance.SUPPORTS
+    else:
+        passage_negated = _is_negated(passage)
+        stance = SourceStance.SUPPORTS if claim_negated == passage_negated else SourceStance.CONTRADICTS
+
     confidence = min(0.97, 0.58 + 0.39 * relevance)
     return stance, round(confidence, 4)
 
