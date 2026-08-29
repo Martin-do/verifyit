@@ -39,10 +39,15 @@ class EvidenceItem(BaseModel):
     source_type: str
     supports_claim: bool | None = None
     publisher: str | None = None
+    snippet: str | None = None
     rating: str | None = None
     review_date: str | None = None
     claim_text: str | None = None
+    source_label: str | None = None
     match_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    authority_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    relevance_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    quality_score: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class VerifyResponse(BaseModel):
