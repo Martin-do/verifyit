@@ -10,56 +10,80 @@ Providers implement the `EvidenceProvider` protocol in `backend/app/services/evi
 class EvidenceProvider(Protocol):
     provider_id: str
 
-    def search(self, query: str, context: str) -> list[FactCheckHit]:
+    def search(self, query: str, context: str) -> list[EvidenceHit]:
         ...
 ```
 
-A provider is registered with `register_evidence_provider(provider_id, factory)`. The verifier obtains the configured provider through `get_configured_evidence_provider()` and calls only its generic `search()` method.
+`EvidenceHit` is the shared provider-neutral candidate shape. Providers may fill fields such as title, URL, snippet, publication date, provider score, published rating, or claim-match score depending on what their upstream service exposes.
 
-This keeps the public product and verification flow independent of any vendor.
+A provider is registered with `register_evidence_provider(provider_id, factory)`. The verifier obtains the explicitly selected provider through `get_configured_evidence_provider()` and calls only its generic `search()` method.
 
-## Bundled MVP adapter
+## Bundled providers
 
-The repository currently includes one bundled adapter for Google's Fact Check Tools API. It is an implementation example, not a product dependency. Developers may add another provider or replace it entirely.
+### Tavily
 
-To select a registered provider, set:
-
-```text
-VERIFYIT_EVIDENCE_PROVIDER=<provider-id>
-```
-
-The bundled adapter now authenticates with OAuth 2.0 rather than an API key. It uses Google Application Default Credentials (ADC) with this scope:
+Provider id:
 
 ```text
-https://www.googleapis.com/auth/factchecktools
+tavily
 ```
 
-For local development, create ADC credentials outside the repository. A typical flow is:
-
-```bash
-gcloud auth application-default login \
-  --client-id-file=PATH_TO_CLIENT_JSON \
-  --scopes=https://www.googleapis.com/auth/factchecktools,https://www.googleapis.com/auth/cloud-platform
-```
-
-`google-auth` then discovers and refreshes the credentials automatically. `GOOGLE_APPLICATION_CREDENTIALS` is also honored by ADC when an appropriate workload credential file is supplied.
-
-For short-lived debugging only, the bundled adapter also accepts:
+Configuration:
 
 ```text
-VERIFYIT_GOOGLE_ACCESS_TOKEN=<temporary OAuth access token>
+VERIFYIT_EVIDENCE_PROVIDER=tavily
+TAVILY_API_KEY=<key>
 ```
 
-Do not commit access tokens, OAuth client secrets, ADC files, or service-account keys. Production deployments should use the platform's supported workload identity/ADC mechanism wherever possible.
+The adapter performs general web search and converts results into `EvidenceHit` records. VerifyIt then applies its own source ranking rather than accepting the upstream rank as a truth score.
 
-The previous `GOOGLE_FACT_CHECK_API_KEY` configuration is no longer used because the live search endpoint rejects API-key-only authentication.
+### SearXNG
+
+Provider id:
+
+```text
+searxng
+```
+
+Configuration:
+
+```text
+VERIFYIT_EVIDENCE_PROVIDER=searxng
+SEARXNG_BASE_URL=https://your-instance.example
+```
+
+The configured SearXNG instance must allow JSON output. This adapter is useful for operators who want an open/self-hosted search layer. The base URL is trusted operator configuration, not user input.
+
+### Google published fact checks (optional)
+
+Provider id:
+
+```text
+google_factcheck
+```
+
+This adapter queries an existing published-fact-check index and currently requires OAuth credentials. It is optional and is not required for general VerifyIt development.
+
+## Source ranking
+
+General search results are ranked after retrieval using a documented heuristic combining:
+
+- source-authority prior,
+- query/result relevance,
+- provider relevance score when supplied,
+- freshness as a small factor.
+
+Government/official/academic/fact-check sources receive stronger authority priors than generic web pages or social platforms. This ranking only decides which evidence candidates should be inspected first; it does **not** prove that a claim is true.
+
+## Trust boundary
+
+Search-result snippets are discovery material, not final evidence. The current general-search milestone returns ranked sources but keeps the factual verdict `UNVERIFIED`. The next evidence-synthesis layer will fetch selected source pages, extract relevant passages, compare those passages with the claim, and require traceable support/contradiction before assigning a verdict.
 
 ## Adding a custom provider
 
 1. Implement `EvidenceProvider`.
-2. Convert provider results into the shared evidence-hit shape expected by the verifier.
+2. Convert upstream results into `EvidenceHit` records.
 3. Register a factory under a unique provider id.
-4. Select that provider through configuration.
+4. Select that provider through `VERIFYIT_EVIDENCE_PROVIDER`.
 5. Keep provider-specific credentials and errors behind the adapter boundary.
-
-Future provider adapters may include general web search, primary-source search, organization-specific corpora, or self-hosted retrieval systems.
+6. Never treat a provider's relevance/ranking score as a factual truth score.

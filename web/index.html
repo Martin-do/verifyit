@@ -20,17 +20,19 @@
     .verdict { font-size: 1.4rem; font-weight: 800; }
     .meta { font-size: .9rem; color: #555; line-height: 1.5; }
     .warning { padding: 12px; border-radius: 10px; background: #fff4d6; line-height: 1.5; margin-top: 10px; }
-    .evidence { margin-top: 18px; }
-    .evidence article { border-top: 1px solid #e8e8e8; padding: 12px 0; }
-    .evidence a { color: inherit; font-weight: 700; }
+    .evidence { margin-top: 20px; }
+    .evidence article { border-top: 1px solid #e8e8e8; padding: 15px 0; }
+    .evidence a { color: inherit; font-weight: 750; }
     .rating { font-weight: 700; }
+    .snippet { line-height: 1.5; margin-top: 6px; }
+    .badge { display: inline-block; padding: 3px 8px; margin: 6px 6px 0 0; border: 1px solid #ddd; border-radius: 999px; font-size: .78rem; color: #444; }
   </style>
 </head>
 <body>
   <main>
-    <div class="eyebrow">VerifyIt MVP · 0.2</div>
+    <div class="eyebrow">VerifyIt MVP · 0.3</div>
     <h1>Check before you believe, pay, or share.</h1>
-    <p class="lead">Paste a claim or public link. VerifyIt inspects content it can actually access and, when configured, searches external evidence sources. Uncertain or inaccessible content stays explicitly unverified.</p>
+    <p class="lead">Paste a claim or public link. VerifyIt inspects content it can actually access, retrieves external evidence when configured, and ranks candidate sources by relevance and source quality. Uncertain content stays explicitly unverified.</p>
 
     <section class="card">
       <form id="verify-form">
@@ -73,6 +75,10 @@
       return String(value ?? '').replace(/[&<>'"]/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
     }
 
+    function pct(value) {
+      return value == null ? null : Math.round(Number(value) * 100) + '%';
+    }
+
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
       button.disabled = true;
@@ -95,11 +101,18 @@
         warnings.innerHTML = (data.warnings || []).map(item => `<div class="warning">${escapeHtml(item)}</div>`).join('');
 
         if (data.evidence && data.evidence.length) {
-          evidence.innerHTML = '<strong>Evidence</strong>' + data.evidence.map(item => `
+          evidence.innerHTML = '<strong>Ranked evidence</strong>' + data.evidence.map(item => `
             <article>
               <a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title)}</a>
-              <div class="meta">${escapeHtml(item.publisher || 'Unknown publisher')}${item.review_date ? ' · ' + escapeHtml(item.review_date) : ''}${item.match_score != null ? ' · match ' + Math.round(item.match_score * 100) + '%' : ''}</div>
-              ${item.rating ? `<div class="rating">Rating: ${escapeHtml(item.rating)}</div>` : ''}
+              <div>
+                ${item.source_label ? `<span class="badge">${escapeHtml(item.source_label)}</span>` : ''}
+                ${item.quality_score != null ? `<span class="badge">quality ${pct(item.quality_score)}</span>` : ''}
+                ${item.authority_score != null ? `<span class="badge">authority ${pct(item.authority_score)}</span>` : ''}
+                ${item.relevance_score != null ? `<span class="badge">relevance ${pct(item.relevance_score)}</span>` : ''}
+              </div>
+              <div class="meta">${escapeHtml(item.publisher || '')}${item.review_date ? (item.publisher ? ' · ' : '') + escapeHtml(item.review_date) : ''}${item.match_score != null ? ' · claim match ' + pct(item.match_score) : ''}</div>
+              ${item.snippet ? `<div class="snippet">${escapeHtml(item.snippet)}</div>` : ''}
+              ${item.rating ? `<div class="rating">Published rating: ${escapeHtml(item.rating)}</div>` : ''}
               ${item.claim_text ? `<div class="meta">Reviewed claim: ${escapeHtml(item.claim_text)}</div>` : ''}
             </article>`).join('');
         } else {
