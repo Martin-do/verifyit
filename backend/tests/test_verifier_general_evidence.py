@@ -27,4 +27,4 @@ def test_web_search_returns_ranked_evidence_without_guessing(monkeypatch) -> Non
     assert len(response.evidence) == 1
     assert response.evidence[0].source_label == "official government source"
     assert response.evidence[0].quality_score is not None
-    assert any("snippets alone" in warning for warning in response.warnings)
+    assert any("single search result" in warning.lower() for warning in response.warnings)
