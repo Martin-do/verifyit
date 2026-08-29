@@ -8,7 +8,7 @@ def _hit(title: str, url: str, snippet: str, provider_score: float = 0.9) -> Evi
         url=url,
         snippet=snippet,
         provider_score=provider_score,
-        source_kind="web_search",
+        source_type="web_search",
     )
 
 
