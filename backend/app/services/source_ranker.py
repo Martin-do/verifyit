@@ -47,18 +47,39 @@ STOP_WORDS = {
 }
 
 
+def _parsed(value: str):
+    return urlparse(value)
+
+
 def _host(value: str) -> str:
-    return (urlparse(value).hostname or "").lower().rstrip(".")
+    return (_parsed(value).hostname or "").lower().rstrip(".")
 
 
 def _matches_domain(host: str, domain: str) -> bool:
     return host == domain or host.endswith(f".{domain}")
 
 
-def classify_source(url: str) -> tuple[str, float]:
+def _is_government_hosted_academic(url: str) -> bool:
+    parsed = _parsed(url)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    path = (parsed.path or "").lower()
+
+    # PubMed Central/NCBI host third-party scholarly literature on U.S. government
+    # infrastructure. A paper being hosted there does not make the paper an official
+    # U.S. government statement.
+    if host == "pmc.ncbi.nlm.nih.gov" and path.startswith("/articles/"):
+        return True
+    if host == "www.ncbi.nlm.nih.gov" and (path.startswith("/pmc/articles/") or path.startswith("/articles/")):
+        return True
+    return False
+
+
+def classify_source(url: str, *, title: str | None = None, snippet: str | None = None) -> tuple[str, float]:
     """Return a coarse source class and authority prior.
 
     This score is only a ranking heuristic. It is never evidence that a claim is true.
+    Content type can override host ownership where the host republishes or indexes
+    third-party material (for example, scholarly papers hosted on PubMed Central).
     """
 
     host = _host(url)
@@ -67,6 +88,9 @@ def classify_source(url: str) -> tuple[str, float]:
 
     if any(_matches_domain(host, domain) for domain in SOCIAL_DOMAINS):
         return "social platform", 0.20
+
+    if _is_government_hosted_academic(url):
+        return "academic literature (government-hosted)", 0.88
 
     if host.endswith(".gov") or host.endswith(".gov.ng") or host.endswith(".go.ke") or host.endswith(".gov.za") or host.endswith(".gov.gh") or host == "gov.uk" or host.endswith(".gov.uk") or host == "europa.eu" or host.endswith(".europa.eu"):
         return "official government source", 0.97
@@ -100,6 +124,26 @@ def lexical_relevance(query: str, title: str, snippet: str | None) -> float:
     return round(min(1.0, overlap / len(query_tokens)), 4)
 
 
+def _combined_relevance(*, lexical: float, provider_score: float, match_score: float) -> float:
+    """Keep provider ranking as a hint, never a substitute for claim-term coverage."""
+
+    lexical = max(0.0, min(1.0, lexical))
+    provider_score = max(0.0, min(1.0, provider_score))
+    match_score = max(0.0, min(1.0, match_score))
+
+    if match_score > 0:
+        # A provider-specific claim-match score may add signal, but direct lexical
+        # coverage still has to carry most of the relevance assessment.
+        direct = max(lexical, 0.75 * match_score + 0.25 * lexical)
+    else:
+        direct = lexical
+
+    # Search-engine score can refine an already relevant result, but cannot turn a
+    # result with no claim-term overlap into a highly relevant source.
+    adjusted = direct * (0.85 + 0.15 * provider_score)
+    return round(min(1.0, adjusted), 4)
+
+
 def freshness_score(value: str | None, *, now: datetime | None = None) -> float:
     if not value:
         return 0.50
@@ -128,15 +172,15 @@ def freshness_score(value: str | None, *, now: datetime | None = None) -> float:
 def rank_evidence(hits: list[EvidenceHit], query: str) -> list[EvidenceHit]:
     ranked: list[EvidenceHit] = []
     for hit in hits:
-        label, authority = classify_source(hit.url)
+        label, authority = classify_source(hit.url, title=hit.title, snippet=hit.snippet)
         lexical = lexical_relevance(query, hit.title, hit.snippet)
         provider = max(0.0, min(1.0, hit.provider_score or 0.0))
         match = max(0.0, min(1.0, hit.match_score or 0.0))
-        relevance = max(lexical, provider, match)
+        relevance = _combined_relevance(lexical=lexical, provider_score=provider, match_score=match)
         freshness = freshness_score(hit.published_at)
 
-        # Authority and relevance dominate. Freshness is intentionally a small factor;
-        # an old primary source can still be more useful than a new low-quality repost.
+        # Authority and direct relevance dominate. Freshness is intentionally a small
+        # factor; an old primary source can still be more useful than a new repost.
         quality = round(0.48 * authority + 0.47 * relevance + 0.05 * freshness, 4)
         ranked.append(
             replace(
