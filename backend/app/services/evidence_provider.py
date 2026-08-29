@@ -10,7 +10,9 @@ from google.auth.credentials import Credentials
 from google.auth.exceptions import DefaultCredentialsError, RefreshError
 from google.auth.transport.requests import Request as GoogleAuthRequest
 
-from app.services.factcheck import FactCheckHit, FactCheckProviderError, search_fact_checks
+from app.services.evidence_types import EvidenceHit
+from app.services.factcheck import FactCheckProviderError, search_fact_checks
+from app.services.web_search import WebSearchProviderError, search_searxng, search_tavily
 
 
 FACTCHECK_SCOPE = "https://www.googleapis.com/auth/factchecktools"
@@ -21,11 +23,11 @@ class EvidenceProviderError(RuntimeError):
 
 
 class EvidenceProvider(Protocol):
-    """Minimal provider contract used by the verification engine."""
+    """Minimal provider-neutral contract used by the verification engine."""
 
     provider_id: str
 
-    def search(self, query: str, context: str) -> list[FactCheckHit]:
+    def search(self, query: str, context: str) -> list[EvidenceHit]:
         ...
 
 
@@ -34,17 +36,48 @@ _PROVIDER_FACTORIES: dict[str, ProviderFactory] = {}
 
 
 def register_evidence_provider(provider_id: str, factory: ProviderFactory) -> None:
-    """Register a provider factory without changing the verifier."""
-
     normalized = provider_id.strip().lower()
     if not normalized:
         raise ValueError("provider_id cannot be empty")
     _PROVIDER_FACTORIES[normalized] = factory
 
 
+def _safe_provider_error(exc: FactCheckProviderError | WebSearchProviderError) -> EvidenceProviderError:
+    parts: list[str] = []
+    if exc.status_code is not None:
+        parts.append(f"HTTP {exc.status_code}")
+    if exc.detail:
+        parts.append(exc.detail)
+    return EvidenceProviderError(" | ".join(parts) or str(exc))
+
+
+@dataclass
+class TavilyProvider:
+    api_key: str
+    provider_id: str = "tavily"
+
+    def search(self, query: str, context: str) -> list[EvidenceHit]:
+        try:
+            return search_tavily(query, self.api_key)
+        except WebSearchProviderError as exc:
+            raise _safe_provider_error(exc) from None
+
+
+@dataclass
+class SearXNGProvider:
+    base_url: str
+    provider_id: str = "searxng"
+
+    def search(self, query: str, context: str) -> list[EvidenceHit]:
+        try:
+            return search_searxng(query, self.base_url)
+        except WebSearchProviderError as exc:
+            raise _safe_provider_error(exc) from None
+
+
 @dataclass
 class GoogleFactCheckProvider:
-    """Bundled adapter for a published fact-check index using OAuth credentials."""
+    """Optional published-fact-check adapter using OAuth credentials."""
 
     credentials: Credentials | None = None
     access_token: str | None = None
@@ -67,22 +100,41 @@ class GoogleFactCheckProvider:
             raise EvidenceProviderError("OAuth credentials did not provide an access token.")
         return token
 
-    def search(self, query: str, context: str) -> list[FactCheckHit]:
+    def search(self, query: str, context: str) -> list[EvidenceHit]:
         access_token = self._get_access_token()
         try:
-            return search_fact_checks(query, context, access_token)
+            hits = search_fact_checks(query, context, access_token)
         except FactCheckProviderError as exc:
-            parts: list[str] = []
-            if exc.status_code is not None:
-                parts.append(f"HTTP {exc.status_code}")
-            if exc.detail:
-                parts.append(exc.detail)
-            safe_detail = " | ".join(parts) or str(exc)
-            raise EvidenceProviderError(safe_detail) from None
+            raise _safe_provider_error(exc) from None
+
+        return [
+            EvidenceHit(
+                title=hit.review_title,
+                url=hit.review_url,
+                source_type="published_fact_check",
+                publisher=hit.publisher,
+                published_at=hit.review_date,
+                rating=hit.rating,
+                claim_text=hit.claim_text,
+                normalized_verdict=hit.normalized_verdict,
+                match_score=hit.match_score,
+                provider_score=hit.match_score,
+            )
+            for hit in hits
+        ]
+
+
+def _tavily_factory() -> EvidenceProvider | None:
+    api_key = os.getenv("TAVILY_API_KEY", "").strip()
+    return TavilyProvider(api_key=api_key) if api_key else None
+
+
+def _searxng_factory() -> EvidenceProvider | None:
+    base_url = os.getenv("SEARXNG_BASE_URL", "").strip()
+    return SearXNGProvider(base_url=base_url) if base_url else None
 
 
 def _google_factory() -> EvidenceProvider | None:
-    # Useful for short-lived local debugging. Production deployments should prefer ADC.
     access_token = os.getenv("VERIFYIT_GOOGLE_ACCESS_TOKEN", "").strip()
     if access_token:
         return GoogleFactCheckProvider(access_token=access_token)
@@ -91,22 +143,17 @@ def _google_factory() -> EvidenceProvider | None:
         credentials, _ = google.auth.default(scopes=[FACTCHECK_SCOPE])
     except DefaultCredentialsError:
         return None
-
     return GoogleFactCheckProvider(credentials=credentials)
 
 
+register_evidence_provider("tavily", _tavily_factory)
+register_evidence_provider("searxng", _searxng_factory)
 register_evidence_provider("google_factcheck", _google_factory)
 register_evidence_provider("google-factcheck", _google_factory)
 
 
 def get_configured_evidence_provider() -> EvidenceProvider | None:
-    """Return the explicitly selected evidence provider when configured.
-
-    ``VERIFYIT_EVIDENCE_PROVIDER`` selects a registered provider. Keeping selection
-    explicit avoids silently coupling VerifyIt to any provider found on the host.
-    Custom/self-hosted integrations can implement ``EvidenceProvider`` and register
-    their own factory.
-    """
+    """Return the explicitly selected evidence provider when configured."""
 
     provider_id = os.getenv("VERIFYIT_EVIDENCE_PROVIDER", "").strip().lower()
     if not provider_id:
